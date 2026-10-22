@@ -21,7 +21,8 @@ final class HelperService
         foreach (\DI(Finder::class)->in($dir)->files()->name('registry-*.sqlite') as $spl) {
             $ptf = Path::normalize((string)$spl->getRealPath());
             $ipdo = \DI(IPDOSQLite::class, [$ptf]);
-            if ([] === $ipdo->tableInfo('kv')) {
+            if (!$ipdo->existsTable('kv')) {
+                $ipdo->close();
                 continue;
             }
             $kv = \DI(Kv::class, [$ipdo]);
@@ -33,4 +34,6 @@ final class HelperService
             ];
         }
     }
+
+    // TODO добавить метод который будет проверять наличие шардов файлов и записями в регитри
 }

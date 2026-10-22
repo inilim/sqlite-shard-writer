@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Inilim\SqliteShardWriter;
 
+use Inilim\IPDO\Exception\IPDOException;
 use Inilim\IPDO\IPDO;
 use Inilim\IPDO\IPDOSQLite;
 use Inilim\SqliteShardWriter\HelperService;
@@ -114,9 +115,7 @@ class Registry
 
             return $registry;
         } catch (\Throwable $e) {
-            foreach ($files as $f) {
-                FS::unlink($f);
-            }
+            FS::unlink_m2($files);
             throw $e;
         }
     }
@@ -160,24 +159,35 @@ class Registry
         try {
             $this->ipdo->transaction(function ($ipdo) use ($count, &$files, &$shardIds) {
                 $time = \time();
-                $sql = $this->config->schemaSql;
+                $sqls = $this->config->schemaSql;
                 foreach (Obj::rangeInt(1, $count) as $_) {
                     $shardId = ID::uuidv4();
-                    $files[] = $ptf = $this->getShardPtf($shardId);
+                    $files[$shardId] = $ptf = $this->getShardPtf($shardId);
                     File::put($ptf, '');
                     $ipdoShard = \DI(IPDOSQLite::class, [$ptf]);
-                    $ipdoShard->exec($sql);
+                    try {
+                        foreach ($sqls as $sql) {
+                            $ipdoShard->exec($sql);
+                        }
+                    } finally {
+                        $ipdoShard->close();
+                    }
 
                     $ipdo->exec(
                         'INSERT INTO shards (id, created_at, updated_at, schema_version, active) VALUES ({id}, {time}, {time}, 1, 0)',
                         ['id' => $shardId, 'time' => $time]
                     );
                     $shardIds[] = $shardId;
+                    // INFO успешные созданные шарды оставляем
+                    unset($files[$shardId]);
                 }
             });
         } catch (\Throwable $e) {
-            foreach ($files as $f) {
-                FS::unlink($f);
+            if ([] !== $files) {
+                FS::unlink_m2($files);
+            }
+            if ([] !== $shardIds) {
+                $this->ipdo->execBusyRetry('DELETE FROM shards WHERE id IN ({ids})', ['ids' => $shardIds]);
             }
             throw $e;
         }
@@ -246,7 +256,7 @@ class Registry
 
         $time = \time();
         $threshold = $time - $this->config->rentTimeout;
-        $record = $this->ipdo->exec(
+        $record = $this->ipdo->execBusyRetry(
             'UPDATE shards SET active = 1, updated_at = {time} WHERE id IN (
                 SELECT id FROM shards WHERE id = {id} AND (active = 0 OR updated_at <= {threshold})
             ) RETURNING id',
@@ -313,7 +323,7 @@ class Registry
     function release(string $shardId): self
     {
         $this->checkShard($shardId);
-        $this->ipdo->exec(
+        $this->ipdo->execBusyRetry(
             'UPDATE shards SET active = 0 WHERE id IN (
                 SELECT id FROM shards WHERE id = {id} AND active = 1
             )',
@@ -324,6 +334,8 @@ class Registry
     }
 
     /**
+     * Сколько времени осталось до просрочки аренды
+     * 
      * | -1 - не активный шард | 0 - время вышло |
      * @return int<-1,max>
      */
@@ -346,6 +358,9 @@ class Registry
         return $time < 0 ? 0 : $time;
     }
 
+    /**
+     * Принудительно продлеваем аренду
+     */
     function heartbeat(string $shardId): self
     {
         $this->checkShard($shardId);
@@ -354,7 +369,7 @@ class Registry
     }
 
     /**
-     * более экономичная стратегия обновения времени
+     * более экономичная стратегия продления аренды
      */
     function heartbeat_m2(string $shardId): self
     {
@@ -393,10 +408,10 @@ class Registry
 
     protected function _heartbeat(string $shardId, IPDOSQLite $ipdo): void
     {
-        $ipdo->exec(
+        $ipdo->execBusyRetry(
             'UPDATE shards SET updated_at = {time} WHERE id IN (
                 SELECT id FROM shards WHERE id = {id} AND active = 1
-            )',
+            )  AND active = 1',
             ['id' => $shardId, 'time' => \time()],
         );
     }

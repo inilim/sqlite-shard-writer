@@ -17,7 +17,7 @@ final class Kv
     function __construct(
         public readonly IPDOSQLite $ipdo,
     ) {
-        if ([] === $ipdo->tableInfo('kv')) {
+        if (!$ipdo->existsTable('kv')) {
             throw Obj::sprintfInvalidArgumentException('Table "kv" not exists');
         }
     }
@@ -98,7 +98,7 @@ final class Kv
 
     function set(string $key, mixed $value): self
     {
-        $this->ipdo->exec(
+        $this->ipdo->execBusyRetry(
             'INSERT INTO kv (k,v) VALUES ({k}, {v})
                 ON CONFLICT(k) DO UPDATE SET v = {v}',
             [

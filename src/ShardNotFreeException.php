@@ -4,4 +4,4 @@ declare(strict_types=1);
 
 namespace Inilim\SqliteShardWriter;
 
-class ShardNotFreeException extends \Exception {}
+class ShardNotFreeException extends \Inilim\SqliteShardWriter\SqliteShardWriterException {}
