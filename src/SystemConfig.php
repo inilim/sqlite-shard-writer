@@ -56,7 +56,7 @@ class SystemConfig
             } catch (IPDOException $e) {
                 $ipdo->close();
                 throw Obj::sprintfInvalidArgumentException(
-                    'Syntax SQL invalid "%s" [%s...]',
+                    '"%s" [%s...]',
                     [
                         $e->getMessage(),
                         \substr((string)\json_encode($sql), 1, 15)
