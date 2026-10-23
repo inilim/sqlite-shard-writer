@@ -13,7 +13,7 @@ use Inilim\SqliteShardWriter\Kv;
 use Inilim\SqliteShardWriter\RegistryInvalidException;
 use Inilim\SqliteShardWriter\RegistryNameExistsException;
 use Inilim\SqliteShardWriter\RegistryVersionMismatchException;
-use Inilim\SqliteShardWriter\ShardLeaseLostException;
+use Inilim\SqliteShardWriter\ShardRentLostException;
 use Inilim\SqliteShardWriter\ShardNotFoundException;
 use Inilim\SqliteShardWriter\ShardNotFreeException;
 use Inilim\Tool\Assert;
@@ -280,15 +280,29 @@ class Registry
         return $time < 0 ? 0 : $time;
     }
 
+    function isMyRentValid(string $shardId): bool
+    {
+        $threshold = \time() - $this->kv->getInt('rent_timeout');
+
+        return $this->ipdo->exists(
+            'SELECT id FROM shards
+            WHERE id = {id}
+                AND active = 1
+                -- AND owner_token = {token}
+                AND updated_at > {threshold}',
+            ['id' => $shardId, 'threshold' => $threshold],
+        );
+    }
+
     /**
-     * Принудительно продлеваем аренду
-     * @throws ShardLeaseLostException
+     * Продлеваем аренду
+     * @throws ShardRentLostException
      */
     function heartbeat(string $shardId): self
     {
         $this->checkShard($shardId);
         if (!$this->_heartbeat($shardId, $this->ipdo)) {
-            throw new ShardLeaseLostException($shardId);
+            throw new ShardRentLostException($shardId);
         }
         return $this;
     }
@@ -296,7 +310,7 @@ class Registry
     /**
      * более экономичная стратегия продления аренды
      * 
-     * @throws ShardLeaseLostException
+     * @throws ShardRentLostException
      */
     function heartbeat_m2(string $shardId): self
     {
@@ -304,11 +318,11 @@ class Registry
 
         if ($left <= 0) {
             // -1 — не активен, 0 — уже просрочен; в обоих случаях продлевать нечего
-            throw new ShardLeaseLostException($shardId);
+            throw new ShardRentLostException($shardId);
         }
 
         if ($left <= $this->minSecHeartbeat && !$this->_heartbeat($shardId, $this->ipdo)) {
-            throw new ShardLeaseLostException($shardId);
+            throw new ShardRentLostException($shardId);
         }
 
         return $this;
