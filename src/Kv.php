@@ -12,7 +12,7 @@ use Inilim\Tool\Obj;
 /**
  * @internal
  * 
- * @psalm-type TYPE_KEYS = 'schema_sql'|'created_at'|'rent_timeout'|'min_shards'|'name'
+ * @psalm-type TYPE_KEYS = 'schema_sql'|'created_at'|'rent_timeout'|'min_shards'|'name'|'version'
  */
 final class Kv
 {

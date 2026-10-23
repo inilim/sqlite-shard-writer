@@ -10,7 +10,9 @@ use Inilim\IPDO\IPDOSQLite;
 use Inilim\SqliteShardWriter\CreateConfig;
 use Inilim\SqliteShardWriter\HelperService;
 use Inilim\SqliteShardWriter\Kv;
+use Inilim\SqliteShardWriter\RegistryInvalidException;
 use Inilim\SqliteShardWriter\RegistryNameExistsException;
+use Inilim\SqliteShardWriter\RegistryVersionMismatchException;
 use Inilim\SqliteShardWriter\ShardNotFoundException;
 use Inilim\SqliteShardWriter\ShardNotFreeException;
 use Inilim\Tool\Assert;
@@ -23,8 +25,10 @@ use Inilim\Tool\VD;
 
 class Registry
 {
-    protected Kv $kv;
-    protected string $baseDir;
+    const VERSION = 1;
+
+    protected readonly Kv $kv;
+    public readonly string $baseDir;
     protected(set) int $minSecHeartbeat = 10;
 
     protected function __construct(
@@ -332,13 +336,46 @@ class Registry
             return null;
         }
         $ipdo = \DI(IPDOSQLite::class, [$ptf]);
-        if (!$ipdo->existsTable('kv') || !$ipdo->existsTable('shards')) {
-            $ipdo->close();
-            // INFO Удаляем сломанный регистр
-            FS::unlink($ptf);
-            return null;
+
+        // INFO проверка таблиц
+        $missingTables = [];
+        foreach (['kv', 'shards'] as $tbl) {
+            if (!$ipdo->existsTable($tbl)) {
+                $missingTables[] = $tbl;
+            }
         }
+        if ([] !== $missingTables) {
+            $ipdo->close();
+            throw new RegistryInvalidException(\sprintf(
+                'Invalid registry "%s" at "%s": required table(s) missing [%s]; the file is not a valid %s registry (corrupted, or another SQLite file placed at this path); remove the file and recreate the registry via %s::create().',
+                $name,
+                $ptf,
+                \implode(', ', $missingTables),
+                __NAMESPACE__,
+                self::class,
+            ));
+        }
+
         $kv = \DI(Kv::class, [$ipdo]);
+
+        // INFO Проверка версии регистра
+        $regVer = $kv->getInt('version');
+        if (self::VERSION !== $regVer) {
+            $ipdo->close();
+            throw new RegistryVersionMismatchException(\sprintf(
+                'Unsupported registry version for "%s" (%s): expected %s, got %s. %s',
+                $name,
+                $ptf,
+                self::VERSION,
+                $regVer,
+                (
+                    $regVer < self::VERSION
+                    ? \sprintf('The registry file is outdated and is not supported by the current class. Migrate it to version %s or recreate the registry.', self::VERSION)
+                    : \sprintf('The registry file was created by a newer version and is not supported by the current class. Upgrade %s to a version that supports format %s.', __NAMESPACE__, $regVer)
+                ),
+            ));
+        }
+
         $reg = new self(ipdo: $ipdo, kv: $kv);
 
         // INFO Проверяем наличие минимальных шардов
@@ -388,7 +425,7 @@ class Registry
         try {
 
             // INFO callback для очищения переменных, они не очищаются если выбросится исключение, тем самым файлы не удалятся
-            [$ipdoReg, $kv] = (static function (CreateConfig $config, array &$files): array {
+            [$ipdoReg, $kv] = (static function (CreateConfig $config, int $version, array &$files): array {
                 $ptf = $config->ptfRegistry;
                 File::put($ptf, '');
                 $files[] = $ptf;
@@ -406,6 +443,7 @@ class Registry
                 foreach (
                     [
                         'name'         => $config->name,
+                        'version'      => $version,
                         'schema_sql'   => $config->schemaSql,
                         'created_at'   => \time(),
                         'rent_timeout' => $config->rentTimeout,
@@ -416,7 +454,7 @@ class Registry
                 }
 
                 return [$ipdoReg, $kv];
-            })($config, $files);
+            })($config, self::VERSION, $files);
             $files = [];
 
             $registry = new self(ipdo: $ipdoReg, kv: $kv);
