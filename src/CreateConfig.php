@@ -31,7 +31,7 @@ class CreateConfig
         string|array $schemaSql,
         string $name,
         int $minShards = 5,
-        int $rentTimeout = 120,
+        int $rentTimeout = 30,
     ) {
         Assert::stringNotEmpty($name);
         $this->setRentTimeout($rentTimeout);

@@ -477,12 +477,12 @@ class Registry
 
     // PROTECTED
 
-    protected function _heartbeat(string $shardId, IPDOSQLite $ipdo): void
+    protected function _heartbeat(string $shardId, IPDOSQLite $ipdoReg): void
     {
-        $ipdo->execBusyRetry(
+        $ipdoReg->execBusyRetry(
             'UPDATE shards SET updated_at = {time} WHERE id IN (
                 SELECT id FROM shards WHERE id = {id} AND active = 1
-            )  AND active = 1',
+            ) AND active = 1',
             ['id' => $shardId, 'time' => \time()],
         );
     }

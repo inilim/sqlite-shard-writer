@@ -75,12 +75,12 @@ final class Kv
     /**
      * @param TYPE_KEYS $key
      */
-    function existsKey(string $key): bool
-    {
-        return $this->ipdo->exists('SELECT * FROM kv WHERE k = {k}', [
-            'k' => $key,
-        ]);
-    }
+    // function existsKey(string $key): bool
+    // {
+    //     return $this->ipdo->exists('SELECT * FROM kv WHERE k = {k}', [
+    //         'k' => $key,
+    //     ]);
+    // }
 
     /**
      * @param TYPE_KEYS $key
@@ -97,27 +97,27 @@ final class Kv
      * @param TYPE_KEYS[] $keys
      * @return array<string,mixed>
      */
-    function getItems(array $keys): array
-    {
-        $results = $this->ipdo->exec(
-            'SELECT * FROM kv WHERE k in ({keys})',
-            ['keys' => $keys],
-            IPDO::FETCH_ALL
-        );
-        $results = \array_column($results, 'v', 'k');
-        /** @var array<string,string> $results */
+    // function getItems(array $keys): array
+    // {
+    //     $results = $this->ipdo->exec(
+    //         'SELECT * FROM kv WHERE k in ({keys})',
+    //         ['keys' => $keys],
+    //         IPDO::FETCH_ALL
+    //     );
+    //     $results = \array_column($results, 'v', 'k');
+    //     /** @var array<string,string> $results */
 
-        foreach ($keys as $key) {
-            $result = $results[$key] ?? null;
-            if (null !== $result) {
-                $result = \json_decode($result, true)['value'];
-            }
+    //     foreach ($keys as $key) {
+    //         $result = $results[$key] ?? null;
+    //         if (null !== $result) {
+    //             $result = \json_decode($result, true)['value'];
+    //         }
 
-            $results[$key] = $result;
-        }
+    //         $results[$key] = $result;
+    //     }
 
-        return $results;
-    }
+    //     return $results;
+    // }
 
     /**
      * @param TYPE_KEYS $key
