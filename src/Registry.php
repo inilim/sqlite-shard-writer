@@ -13,6 +13,7 @@ use Inilim\SqliteShardWriter\Kv;
 use Inilim\SqliteShardWriter\RegistryInvalidException;
 use Inilim\SqliteShardWriter\RegistryNameExistsException;
 use Inilim\SqliteShardWriter\RegistryVersionMismatchException;
+use Inilim\SqliteShardWriter\ShardLeaseLostException;
 use Inilim\SqliteShardWriter\ShardNotFoundException;
 use Inilim\SqliteShardWriter\ShardNotFreeException;
 use Inilim\Tool\Assert;
@@ -281,27 +282,33 @@ class Registry
 
     /**
      * Принудительно продлеваем аренду
+     * @throws ShardLeaseLostException
      */
     function heartbeat(string $shardId): self
     {
         $this->checkShard($shardId);
-        $this->_heartbeat($shardId, $this->ipdo);
+        if (!$this->_heartbeat($shardId, $this->ipdo)) {
+            throw new ShardLeaseLostException($shardId);
+        }
         return $this;
     }
 
     /**
      * более экономичная стратегия продления аренды
+     * 
+     * @throws ShardLeaseLostException
      */
     function heartbeat_m2(string $shardId): self
     {
-        $left_time_sec = $this->leftTimeUntilRelease($shardId);
+        $left = $this->leftTimeUntilRelease($shardId);
 
-        if (-1 === $left_time_sec || 0 === $left_time_sec) {
-            return $this;
+        if ($left <= 0) {
+            // -1 — не активен, 0 — уже просрочен; в обоих случаях продлевать нечего
+            throw new ShardLeaseLostException($shardId);
         }
 
-        if ($left_time_sec <= $this->minSecHeartbeat) {
-            $this->_heartbeat($shardId, $this->ipdo);
+        if ($left <= $this->minSecHeartbeat && !$this->_heartbeat($shardId, $this->ipdo)) {
+            throw new ShardLeaseLostException($shardId);
         }
 
         return $this;
@@ -477,14 +484,23 @@ class Registry
 
     // PROTECTED
 
-    protected function _heartbeat(string $shardId, IPDOSQLite $ipdoReg): void
+    protected function _heartbeat(string $shardId, IPDOSQLite $ipdoReg): bool
     {
-        $ipdoReg->execBusyRetry(
-            'UPDATE shards SET updated_at = {time} WHERE id IN (
-                SELECT id FROM shards WHERE id = {id} AND active = 1
-            ) AND active = 1',
-            ['id' => $shardId, 'time' => \time()],
+        $time      = \time();
+        $threshold = $time - $this->kv->getInt('rent_timeout');
+
+        $record = $ipdoReg->execBusyRetry(
+            'UPDATE shards SET updated_at = {time}
+                WHERE id IN (
+                    SELECT id FROM shards
+                        WHERE id = {id} AND active = 1 AND updated_at > {threshold}
+            ) AND active = 1
+            RETURNING id',
+            ['id' => $shardId, 'time' => $time, 'threshold' => $threshold],
+            IPDO::FETCH_ONCE_NUM,
         );
+
+        return [] !== $record;
     }
 
     /**
