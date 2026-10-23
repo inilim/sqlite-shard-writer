@@ -12,7 +12,7 @@ use Inilim\Tool\Obj;
 /**
  * @internal
  * 
- * @psalm-type TYPE_KEYS = 'schema_sql'|'created_at'|'rent_timeout'|'min_shards'|'table_name'
+ * @psalm-type TYPE_KEYS = 'schema_sql'|'created_at'|'rent_timeout'|'min_shards'|'name'
  */
 final class Kv
 {
@@ -133,5 +133,17 @@ final class Kv
             ]
         );
         return $this;
+    }
+
+    /**
+     * @param TYPE_KEYS $key
+     */
+    function setIfChangeValue(string $key, mixed $value): bool
+    {
+        if ($this->exists($key, $value)) {
+            return false;
+        }
+        $this->set($key, $value);
+        return true;
     }
 }

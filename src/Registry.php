@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Inilim\SqliteShardWriter;
 
+use Inilim\IPDO\Exception\IPDOException;
 use Inilim\IPDO\IPDO;
 use Inilim\IPDO\IPDOSQLite;
+use Inilim\SqliteShardWriter\CreateConfig;
 use Inilim\SqliteShardWriter\HelperService;
 use Inilim\SqliteShardWriter\Kv;
+use Inilim\SqliteShardWriter\RegistryNameExistsException;
 use Inilim\SqliteShardWriter\ShardNotFoundException;
 use Inilim\SqliteShardWriter\ShardNotFreeException;
-use Inilim\SqliteShardWriter\TableExistsException;
 use Inilim\Tool\Assert;
 use Inilim\Tool\File;
 use Inilim\Tool\FS;
@@ -44,17 +46,23 @@ class Registry
 
     function setRentTimeout(int $rentTimeout): self
     {
-        $key = 'rent_timeout';
-        if ($this->kv->exists($key, $rentTimeout)) {
-            return $this;
-        }
-        $this->kv->set($key, $rentTimeout);
+        Assert::positiveInteger($rentTimeout);
+
+        $this->kv->setIfChangeValue('rent_timeout', $rentTimeout);
         return $this;
     }
 
-    function getTableName(): string
+    function setMinShards(int $minShards): self
     {
-        return $this->kv->get('table_name');
+        Assert::positiveInteger($minShards);
+
+        $this->kv->setIfChangeValue('min_shards', $minShards);
+        return $this;
+    }
+
+    function getName(): string
+    {
+        return $this->kv->get('name');
     }
 
     /**
@@ -65,39 +73,33 @@ class Registry
         Assert::positiveInteger($count);
         $shardIds = [];
         $files = [];
-        try {
-            $this->ipdo->transaction(function ($ipdo) use ($count, &$files, &$shardIds) {
-                $time = \time();
-                $sqls = $this->kv->get('schema_sql');
-                /** @var string[] $sqls */
-                foreach (Obj::rangeInt(1, $count) as $_) {
-                    $shardId = ID::uuidv4();
-                    $files[$shardId] = $ptf = $this->getShardPtf($shardId);
-                    File::put($ptf, '');
-                    $ipdoShard = \DI(IPDOSQLite::class, [$ptf]);
-                    try {
-                        foreach ($sqls as $sql) {
-                            $ipdoShard->exec($sql);
-                        }
-                    } finally {
-                        $ipdoShard->close();
-                    }
+        $time = \time();
+        $sql_shard = 'INSERT INTO shards (id, created_at, updated_at, schema_version, active) VALUES ({id}, {time}, {time}, 1, 0)';
 
-                    $ipdo->exec(
-                        'INSERT INTO shards (id, created_at, updated_at, schema_version, active) VALUES ({id}, {time}, {time}, 1, 0)',
-                        ['id' => $shardId, 'time' => $time]
-                    );
-                    $shardIds[] = $shardId;
-                    // INFO успешные созданные шарды оставляем
-                    unset($files[$shardId]);
+        try {
+            $sqls = $this->kv->get('schema_sql');
+            /** @var string[] $sqls */
+            foreach (Obj::rangeInt(1, $count) as $_) {
+                $shardId = ID::uuidv4();
+                $files[$shardId] = $ptf = $this->getShardPtf($shardId);
+                File::put($ptf, '');
+                $ipdoShard = \DI(IPDOSQLite::class, [$ptf]);
+                try {
+                    foreach ($sqls as $sql) {
+                        $ipdoShard->exec($sql);
+                    }
+                } finally {
+                    $ipdoShard->close();
                 }
-            });
-        } catch (\Throwable $e) {
+
+                $this->ipdo->exec($sql_shard, ['id' => $shardId, 'time' => $time]);
+                $shardIds[] = $shardId;
+                // INFO успешные созданные шарды оставляем
+                unset($files[$shardId]);
+            }
+        } catch (IPDOException $e) {
             if ([] !== $files) {
                 FS::unlink_m2($files);
-            }
-            if ([] !== $shardIds) {
-                $this->ipdo->execBusyRetry('DELETE FROM shards WHERE id IN ({ids})', ['ids' => $shardIds]);
             }
             throw $e;
         }
@@ -323,9 +325,9 @@ class Registry
 
     // STATIC
 
-    static function discover(string $baseDir, string $tableName): ?Registry
+    static function discover(string $baseDir, string $name): ?Registry
     {
-        $ptf = \DI(HelperService::class)->findRegistryFile($baseDir, $tableName);
+        $ptf = \DI(HelperService::class)->findRegistryFile($baseDir, $name);
         if (null === $ptf) {
             return null;
         }
@@ -355,62 +357,76 @@ class Registry
 
     static function discoverFromCreateConfig(CreateConfig $config): ?Registry
     {
-        return self::discover($config->baseDir, $config->tableName);
+        $reg = self::discover($config->baseDir, $config->name);
+        if (null === $reg) {
+            return null;
+        }
+
+        $reg
+            ->setRentTimeout($config->rentTimeout)
+            ->setMinShards($config->minShards)
+            // 
+        ;
+        return $reg;
     }
 
     /**
-     * @throws TableExistsException
+     * @throws RegistryNameExistsException
      */
-    static function createNew(CreateConfig $config): Registry
+    static function create(CreateConfig $config): Registry
     {
         $obj = self::discoverFromCreateConfig($config);
         if (null !== $obj) {
-            throw new TableExistsException($obj->getTableName());
+            throw new RegistryNameExistsException($obj->getName());
         }
-        return self::_createNew($config);
+        return self::_create($config);
     }
 
-    static protected function _createNew(CreateConfig $config): Registry
+    static protected function _create(CreateConfig $config): Registry
     {
         $files = [];
         try {
 
             // INFO callback для очищения переменных, они не очищаются если выбросится исключение, тем самым файлы не удалятся
-            $ipdoRegistry = (static function (CreateConfig $config, array &$files): IPDOSQLite {
-                File::put($config->ptfRegistry, '');
-                $files[] = $config->ptfRegistry;
-                $ipdoRegistry = \DI(IPDOSQLite::class, [$config->ptfRegistry]);
+            [$ipdoReg, $kv] = (static function (CreateConfig $config, array &$files): array {
+                $ptf = $config->ptfRegistry;
+                File::put($ptf, '');
+                $files[] = $ptf;
+                $ipdoReg = \DI(IPDOSQLite::class, [$ptf]);
                 foreach (
                     [
                         'CREATE TABLE kv (k TEXT PRIMARY KEY NOT NULL, v TEXT NOT NULL)',
                         'CREATE TABLE shards (id TEXT PRIMARY KEY NOT NULL, schema_version INTEGER NOT NULL, active INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)',
                     ] as $sql
                 ) {
-                    $ipdoRegistry->exec($sql);
+                    $ipdoReg->exec($sql);
                 }
 
-                $kv = \DI(Kv::class, [$ipdoRegistry]);
+                $kv = \DI(Kv::class, [$ipdoReg]);
                 foreach (
                     [
+                        'name'         => $config->name,
                         'schema_sql'   => $config->schemaSql,
                         'created_at'   => \time(),
                         'rent_timeout' => $config->rentTimeout,
                         'min_shards'   => $config->minShards,
-                        'table_name'   => $config->tableName,
                     ] as $key => $value
                 ) {
                     $kv->set($key, $value);
                 }
 
-                return $ipdoRegistry;
+                return [$ipdoReg, $kv];
             })($config, $files);
+            $files = [];
 
-            $registry = new self(ipdo: $ipdoRegistry);
+            $registry = new self(ipdo: $ipdoReg, kv: $kv);
             $registry->createNewShards($config->minShards);
 
             return $registry;
         } catch (\Throwable $e) {
-            FS::unlink_m2($files);
+            if ([] !== $files) {
+                FS::unlink_m2($files);
+            }
             throw $e;
         }
     }
@@ -418,7 +434,7 @@ class Registry
     static function createOrDiscover(CreateConfig $config): Registry
     {
         $reg = self::discoverFromCreateConfig($config);
-        return null === $reg ? self::_createNew($config) : $reg;
+        return null === $reg ? self::_create($config) : $reg;
     }
 
     // PROTECTED

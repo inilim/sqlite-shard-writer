@@ -20,7 +20,7 @@ class CreateConfig
     protected(set) int $minShards;
     protected(set) int $rentTimeout;
 
-    public readonly string $tableName;
+    public readonly string $name;
     public readonly string $ptfRegistry;
 
     /**
@@ -29,10 +29,11 @@ class CreateConfig
     function __construct(
         string $baseDir,
         string|array $schemaSql,
-        ?string $tableName = null,
+        string $name,
         int $minShards = 5,
         int $rentTimeout = 120,
     ) {
+        Assert::stringNotEmpty($name);
         $this->setRentTimeout($rentTimeout);
         $this->setMinShards($minShards);
         $_baseDir = Path::realPath($baseDir);
@@ -58,29 +59,11 @@ class CreateConfig
             }
         }
 
-        if (null === $tableName) {
-            $names = \array_column($ipdoMem->master('table'), 'tbl_name');
-            /** @var string[] $names */
-            // INFO Если schemaSql создаёт несколько таблиц, будет взята первая таблица что выдаст метод master().
-            foreach ($names as $name) {
-                if (false === \in_array($name, ['sqlite_sequence'], true)) {
-                    $tableName = $name;
-                    break;
-                }
-            }
-            unset($names);
-        }
-
-        if (null === $tableName || !$ipdoMem->existsTable($tableName)) {
-            $ipdoMem->close();
-            throw Obj::sprintfInvalidArgumentException('SQL not created table');
-        }
-
         $ipdoMem->close();
         unset($ipdoMem);
 
-        $this->tableName = $tableName;
-        $this->ptfRegistry = Path::normalize(\sprintf('%s/registry-%s.sqlite', $this->baseDir, \sha1($tableName, false)));
+        $this->name = $name;
+        $this->ptfRegistry = Path::normalize(\sprintf('%s/registry-%s.sqlite', $this->baseDir, \sha1($name, false)));
     }
 
     function setMinShards(int $minShards): self
@@ -96,25 +79,4 @@ class CreateConfig
         $this->rentTimeout = $rentTimeout;
         return $this;
     }
-
-    // static function fromIPDO(IPDOSQLite $ipdo): self
-    // {
-    //     $ptf = $ipdo->getMainFile();
-    //     if ('' === $ptf) {
-    //         throw Obj::sprintfInvalidArgumentException('[IPDOSQLite $ipdo] connection must be to an SQLite file.');
-    //     }
-    //     $baseDir = \dirname($ptf);
-
-    //     // Получаем все нужные ключи из kv
-    //     $kv = \DI(Kv::class, [$ipdo]);
-    //     $data = $kv->getItems(['schema_sql', 'min_shards', 'rent_timeout', 'table_name']);
-
-    //     return new self(
-    //         baseDir: $baseDir,
-    //         schemaSql: $data['schema_sql'],
-    //         tableName: $data['table_name'],
-    //         minShards: $data['min_shards'],
-    //         rentTimeout: $data['rent_timeout'],
-    //     );
-    // }
 }

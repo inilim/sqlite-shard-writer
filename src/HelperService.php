@@ -30,12 +30,12 @@ final class HelperService
         }
     }
 
-    function findRegistryFile(string $baseDir, string $tableName): ?string
+    function findRegistryFile(string $baseDir, string $name): ?string
     {
         Assert::directory($baseDir);
-        Assert::stringNotEmpty($tableName);
+        Assert::stringNotEmpty($name);
 
-        $ptf = \sprintf('%s/registry-%s.sqlite', $baseDir, \sha1($tableName, false));
+        $ptf = \sprintf('%s/registry-%s.sqlite', $baseDir, \sha1($name, false));
         $ptf = Path::normalize($ptf);
         // VD::de($ptf);
         return FS::isFile($ptf) ? $ptf : null;
