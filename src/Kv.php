@@ -11,6 +11,8 @@ use Inilim\Tool\Obj;
 
 /**
  * @internal
+ * 
+ * @psalm-type TYPE_KEYS = 'schema_sql'|'created_at'|'rent_timeout'|'min_shards'|'table_name'
  */
 final class Kv
 {
@@ -24,6 +26,7 @@ final class Kv
 
     /**
      * @throws KeyNotFoundKvException
+     * @param TYPE_KEYS $key
      */
     function get(string $key): mixed
     {
@@ -34,12 +37,26 @@ final class Kv
         return \json_decode($value, true)['value'];
     }
 
+    /**
+     * @param TYPE_KEYS $key
+     */
+    function getInt(string $key): int
+    {
+        return $this->get($key);
+    }
+
+    /**
+     * @param TYPE_KEYS $key
+     */
     function find(string $key): mixed
     {
         $value = $this->findRaw($key);
         return null === $value ? null : \json_decode($value, true)['value'];
     }
 
+    /**
+     * @param TYPE_KEYS $key
+     */
     function findRaw(string $key): ?string
     {
         $value = $this->ipdo->exec(
@@ -55,6 +72,9 @@ final class Kv
         return $value;
     }
 
+    /**
+     * @param TYPE_KEYS $key
+     */
     function existsKey(string $key): bool
     {
         return $this->ipdo->exists('SELECT * FROM kv WHERE k = {k}', [
@@ -62,6 +82,9 @@ final class Kv
         ]);
     }
 
+    /**
+     * @param TYPE_KEYS $key
+     */
     function exists(string $key, mixed $value): bool
     {
         return $this->ipdo->exists('SELECT * FROM kv WHERE k = {k} AND v = {v}', [
@@ -71,7 +94,7 @@ final class Kv
     }
 
     /**
-     * @param string[] $keys
+     * @param TYPE_KEYS[] $keys
      * @return array<string,mixed>
      */
     function getItems(array $keys): array
@@ -96,6 +119,9 @@ final class Kv
         return $results;
     }
 
+    /**
+     * @param TYPE_KEYS $key
+     */
     function set(string $key, mixed $value): self
     {
         $this->ipdo->execBusyRetry(

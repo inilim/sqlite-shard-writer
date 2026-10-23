@@ -6,33 +6,39 @@ namespace Inilim\SqliteShardWriter;
 
 use Inilim\IPDO\IPDOSQLite;
 use Inilim\Tool\Assert;
+use Inilim\Tool\FS;
 use Inilim\Tool\Path;
+use Inilim\Tool\VD;
 use Symfony\Component\Finder\Finder;
 
 final class HelperService
 {
     /**
-     * @return \Generator<int,array{table_name:string,ptf:string,ipdo:IPDOSQLite,kv:Kv}>
+     * @return \Generator<int,array{ptf:string,ipdo:IPDOSQLite}>
      */
-    function registryIterator(string $dir): \Generator
+    function registryIterator(string $baseDir): \Generator
     {
-        Assert::directory($dir);
-        // registry-098f6bcd4621d373cade4e832627b4f6.sqlite
-        foreach (\DI(Finder::class)->in($dir)->files()->name('registry-*.sqlite') as $spl) {
+        Assert::directory($baseDir);
+
+        foreach (\DI(Finder::class)->in($baseDir)->files()->name('registry-*.sqlite') as $spl) {
             $ptf = Path::normalize((string)$spl->getRealPath());
             $ipdo = \DI(IPDOSQLite::class, [$ptf]);
-            if (!$ipdo->existsTable('kv')) {
-                $ipdo->close();
-                continue;
-            }
-            $kv = \DI(Kv::class, [$ipdo]);
             yield [
-                'table_name' => $kv->get('table_name'),
                 'ptf' => $ptf,
                 'ipdo' => $ipdo,
-                'kv' => $kv,
             ];
         }
+    }
+
+    function findRegistryFile(string $baseDir, string $tableName): ?string
+    {
+        Assert::directory($baseDir);
+        Assert::stringNotEmpty($tableName);
+
+        $ptf = \sprintf('%s/registry-%s.sqlite', $baseDir, \sha1($tableName, false));
+        $ptf = Path::normalize($ptf);
+        // VD::de($ptf);
+        return FS::isFile($ptf) ? $ptf : null;
     }
 
     // TODO добавить метод который будет проверять наличие шардов файлов и записями в регитри
