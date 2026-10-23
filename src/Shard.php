@@ -6,23 +6,24 @@ namespace Inilim\SqliteShard;
 
 use Inilim\IPDO\IPDOSQLite;
 use Inilim\SqliteShard\Registry;
-use Inilim\Tool\ID;
 
-readonly class Shard
+class Shard
 {
-    public string $ownerToken;
+    protected(set) ?string $ownerToken = null;
 
     function __construct(
-        public string $id,
-        public Registry $reg,
-    ) {
-        $this->ownerToken = ID::uuidv7();
-    }
+        public readonly string $id,
+        public readonly Registry $reg,
+    ) {}
 
     // rent
     // tryRent
-    // isFree
     // existsShard
+
+    function isFree(): bool
+    {
+        return $this->reg->isFree($this);
+    }
 
     function getIPDO(): IPDOSQLite
     {
@@ -60,6 +61,6 @@ readonly class Shard
 
     function rentValid(): bool
     {
-        return $this->reg->isMyRentValid($this);
+        return $this->reg->rentValid($this);
     }
 }

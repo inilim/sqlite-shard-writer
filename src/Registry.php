@@ -33,6 +33,8 @@ class Registry
     public readonly string $baseDir;
     protected(set) int $minSecHeartbeat = 10;
 
+    protected static \Closure $setOwnerTokenToShard;
+
     protected function __construct(
         protected IPDOSQLite $ipdo,
         ?Kv $kv = null,
@@ -99,9 +101,9 @@ class Registry
                 }
 
                 $this->ipdo->exec($sql_shard, ['id' => $shardId, 'time' => $time]);
-                $shards[] = new Shard($shardId, $this);
                 // INFO успешные созданные шарды оставляем
                 unset($files[$shardId]);
+                $shards[] = new Shard($shardId, $this);
             }
         } catch (IPDOException $e) {
             if ([] !== $files) {
@@ -204,6 +206,8 @@ class Registry
             throw new ShardNotFreeException($shard->id);
         }
 
+        // $this->setOwnerTokenToShard($shard, $ownerToken);
+
         return $this;
     }
 
@@ -289,7 +293,7 @@ class Registry
         return $time < 0 ? 0 : $time;
     }
 
-    function isMyRentValid(Shard $shard): bool
+    function rentValid(Shard $shard): bool
     {
         $threshold = \time() - $this->kv->getInt('rent_timeout');
 
@@ -524,6 +528,20 @@ class Registry
         );
 
         return [] !== $record;
+    }
+
+    protected function setOwnerTokenToShard(Shard $shard, ?string $ownerToken = null): void
+    {
+        if (!isset(self::$setOwnerTokenToShard)) {
+            self::$setOwnerTokenToShard = (static function (Shard $shard, ?string $ownerToken): void {
+                // IDE ругается
+                $prop = 'ownerToken';
+                $shard->$prop = $ownerToken;
+            })
+                ->bindTo(null, Shard::class);
+        }
+
+        (self::$setOwnerTokenToShard)($shard, $ownerToken);
     }
 
     /**
