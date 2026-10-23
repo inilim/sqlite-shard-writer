@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Inilim\SqliteShardWriter;
+namespace Inilim\SqliteShard;
 
 use Inilim\IPDO\Exception\IPDOException;
 use Inilim\IPDO\IPDOSQLite;

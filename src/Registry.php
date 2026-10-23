@@ -2,20 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Inilim\SqliteShardWriter;
+namespace Inilim\SqliteShard;
 
 use Inilim\IPDO\Exception\IPDOException;
 use Inilim\IPDO\IPDO;
 use Inilim\IPDO\IPDOSQLite;
-use Inilim\SqliteShardWriter\CreateConfig;
-use Inilim\SqliteShardWriter\HelperService;
-use Inilim\SqliteShardWriter\Kv;
-use Inilim\SqliteShardWriter\RegistryInvalidException;
-use Inilim\SqliteShardWriter\RegistryNameExistsException;
-use Inilim\SqliteShardWriter\RegistryVersionMismatchException;
-use Inilim\SqliteShardWriter\ShardRentLostException;
-use Inilim\SqliteShardWriter\ShardNotFoundException;
-use Inilim\SqliteShardWriter\ShardNotFreeException;
+use Inilim\SqliteShard\CreateConfig;
+use Inilim\SqliteShard\HelperService;
+use Inilim\SqliteShard\Kv;
+use Inilim\SqliteShard\RegistryInvalidException;
+use Inilim\SqliteShard\RegistryNameExistsException;
+use Inilim\SqliteShard\RegistryVersionMismatchException;
+use Inilim\SqliteShard\Shard;
+use Inilim\SqliteShard\ShardNotFoundException;
+use Inilim\SqliteShard\ShardNotFreeException;
+use Inilim\SqliteShard\ShardRentLostException;
 use Inilim\Tool\Assert;
 use Inilim\Tool\File;
 use Inilim\Tool\FS;
@@ -71,12 +72,12 @@ class Registry
     }
 
     /**
-     * @return string[]
+     * @return Shard[]
      */
     function createNewShards(int $count = 1): array
     {
         Assert::positiveInteger($count);
-        $shardIds = [];
+        $shards = [];
         $files = [];
         $time = \time();
         $sql_shard = 'INSERT INTO shards (id, created_at, updated_at, schema_version, active) VALUES ({id}, {time}, {time}, 1, 0)';
@@ -98,7 +99,7 @@ class Registry
                 }
 
                 $this->ipdo->exec($sql_shard, ['id' => $shardId, 'time' => $time]);
-                $shardIds[] = $shardId;
+                $shards[] = new Shard($shardId, $this);
                 // INFO успешные созданные шарды оставляем
                 unset($files[$shardId]);
             }
@@ -108,21 +109,25 @@ class Registry
             }
             throw $e;
         }
-        return $shardIds;
+        return $shards;
     }
 
-    function createNewShard(): string
+    function createNewShard(): Shard
     {
         return $this->createNewShards(1)[0];
     }
 
     /**
-     * @return string[]
+     * @return Shard[]
      */
-    function getAllShardIds(): array
+    function getAllShards(): array
     {
-        $ids = $this->ipdo->exec('SELECT id FROM shards', [], IPDO::FETCH_ALL_NUM);
-        return \array_column($ids, 0);
+        $shards = $this->ipdo->exec('SELECT id FROM shards', [], IPDO::FETCH_ALL_NUM);
+        $shards = \array_column($shards, 0);
+        foreach ($shards as &$shard) {
+            $shard = new Shard($shard, $this);
+        }
+        return $shards;
     }
 
     function getCountShards(): int
@@ -132,37 +137,41 @@ class Registry
     }
 
     /**
-     * @return string[]
+     * @return Shard[]
      */
-    function getFreeShardIds(): array
+    function getFreeShards(): array
     {
         $threshold = \time() - $this->kv->getInt('rent_timeout');
 
-        $ids = $this->ipdo->exec(
+        $shards = $this->ipdo->exec(
             'SELECT id FROM shards WHERE active = 0 OR updated_at <= {threshold} ORDER BY updated_at ASC',
             ['threshold' => $threshold],
             IPDO::FETCH_ALL_NUM
         );
-        return \array_column($ids, 0);
+        $shards = \array_column($shards, 0);
+        foreach ($shards as &$shard) {
+            $shard = new Shard($shard, $this);
+        }
+        return $shards;
     }
 
-    function existsShard(string $shardId): bool
+    function existsShard(Shard $shard): bool
     {
-        return $this->ipdo->exists('SELECT * FROM shards WHERE id = {id}', ['id' => $shardId]);
+        return $this->ipdo->exists('SELECT * FROM shards WHERE id = {id}', ['id' => $shard->id]);
     }
 
     /**
      * @throws ShardNotFoundException
      */
-    function isFree(string $shardId): bool
+    function isFree(Shard $shard): bool
     {
-        $this->checkShard($shardId);
+        $this->checkShard($shard);
 
         $threshold = \time() - $this->kv->getInt('rent_timeout');
         return $this->ipdo->exists(
             'SELECT id FROM shards WHERE id = {id} AND (active = 0 OR updated_at <= {threshold})',
             [
-                'id' => $shardId,
+                'id' => $shard->id,
                 'threshold' => $threshold,
             ],
         );
@@ -171,10 +180,10 @@ class Registry
     /**
      * @throws ShardNotFreeException
      */
-    function rentById(string $shardId): self
+    function rent(Shard $shard): self
     {
-        if (!$this->isFree($shardId)) {
-            throw new ShardNotFreeException($shardId);
+        if (!$this->isFree($shard)) {
+            throw new ShardNotFreeException($shard->id);
         }
 
         $time = \time();
@@ -184,7 +193,7 @@ class Registry
                 SELECT id FROM shards WHERE id = {id} AND (active = 0 OR updated_at <= {threshold})
             ) RETURNING id',
             [
-                'id' => $shardId,
+                'id' => $shard->id,
                 'time' => $time,
                 'threshold' => $threshold,
             ],
@@ -192,16 +201,16 @@ class Registry
         );
 
         if ([] === $record) {
-            throw new ShardNotFreeException($shardId);
+            throw new ShardNotFreeException($shard->id);
         }
 
         return $this;
     }
 
-    function tryRentById(string $shardId): bool
+    function tryRent(Shard $shard): bool
     {
         try {
-            $this->rentById($shardId);
+            $this->rent($shard);
             return true;
         } catch (ShardNotFreeException) {
             return false;
@@ -211,14 +220,14 @@ class Registry
     /**
      * @throws ShardNotFreeException
      */
-    function rentFree(): string
+    function rentFree(): Shard
     {
-        $ids = $this->getFreeShardIds();
-        if ([] !== $ids) {
-            // \shuffle($ids);
-            foreach ($ids as $id) {
-                if ($this->tryRentById($id)) {
-                    return $id;
+        $shards = $this->getFreeShards();
+        if ([] !== $shards) {
+            // \shuffle($shards);
+            foreach ($shards as $shard) {
+                if ($this->tryRent($shard)) {
+                    return $shard;
                 }
             }
         }
@@ -226,7 +235,7 @@ class Registry
         throw new ShardNotFreeException('There are no free shards');
     }
 
-    function tryRentFree(): ?string
+    function tryRentFree(): ?Shard
     {
         try {
             return $this->rentFree();
@@ -235,21 +244,21 @@ class Registry
         }
     }
 
-    function getIPDOById(string $shardId): IPDOSQLite
+    function getIPDOByShard(Shard $shard): IPDOSQLite
     {
-        $this->checkShard($shardId);
-        $ptf = $this->getShardPtf($shardId);
+        $this->checkShard($shard);
+        $ptf = $this->getShardPtf($shard);
         return \DI(IPDOSQLite::class, [$ptf]);
     }
 
-    function release(string $shardId): self
+    function release(Shard $shard): self
     {
-        $this->checkShard($shardId);
+        $this->checkShard($shard);
         $this->ipdo->execBusyRetry(
             'UPDATE shards SET active = 0 WHERE id IN (
                 SELECT id FROM shards WHERE id = {id} AND active = 1
             )',
-            ['id' => $shardId],
+            ['id' => $shard->id],
         );
 
         return $this;
@@ -261,12 +270,12 @@ class Registry
      * | -1 - не активный шард | 0 - время вышло |
      * @return int<-1,max>
      */
-    function leftTimeUntilRelease(string $shardId): int
+    function leftTimeUntilRelease(Shard $shard): int
     {
-        $this->checkShard($shardId);
+        $this->checkShard($shard);
         $record = $this->ipdo->exec(
             'SELECT updated_at FROM shards WHERE id = {id} AND active = 1',
-            ['id' => $shardId],
+            ['id' => $shard->id],
             IPDO::FETCH_ONCE_NUM
         );
 
@@ -280,7 +289,7 @@ class Registry
         return $time < 0 ? 0 : $time;
     }
 
-    function isMyRentValid(string $shardId): bool
+    function isMyRentValid(Shard $shard): bool
     {
         $threshold = \time() - $this->kv->getInt('rent_timeout');
 
@@ -290,7 +299,7 @@ class Registry
                 AND active = 1
                 -- AND owner_token = {token}
                 AND updated_at > {threshold}',
-            ['id' => $shardId, 'threshold' => $threshold],
+            ['id' => $shard->id, 'threshold' => $threshold],
         );
     }
 
@@ -298,11 +307,11 @@ class Registry
      * Продлеваем аренду
      * @throws ShardRentLostException
      */
-    function heartbeat(string $shardId): self
+    function heartbeat(Shard $shard): self
     {
-        $this->checkShard($shardId);
-        if (!$this->_heartbeat($shardId, $this->ipdo)) {
-            throw new ShardRentLostException($shardId);
+        $this->checkShard($shard);
+        if (!$this->_heartbeat($shard, $this->ipdo)) {
+            throw new ShardRentLostException($shard->id);
         }
         return $this;
     }
@@ -312,17 +321,17 @@ class Registry
      * 
      * @throws ShardRentLostException
      */
-    function heartbeat_m2(string $shardId): self
+    function heartbeat_m2(Shard $shard): self
     {
-        $left = $this->leftTimeUntilRelease($shardId);
+        $left = $this->leftTimeUntilRelease($shard);
 
         if ($left <= 0) {
             // -1 — не активен, 0 — уже просрочен; в обоих случаях продлевать нечего
-            throw new ShardRentLostException($shardId);
+            throw new ShardRentLostException($shard->id);
         }
 
-        if ($left <= $this->minSecHeartbeat && !$this->_heartbeat($shardId, $this->ipdo)) {
-            throw new ShardRentLostException($shardId);
+        if ($left <= $this->minSecHeartbeat && !$this->_heartbeat($shard, $this->ipdo)) {
+            throw new ShardRentLostException($shard->id);
         }
 
         return $this;
@@ -343,8 +352,8 @@ class Registry
      */
     function getAllShardAsPtf(): \Generator
     {
-        foreach ($this->getAllShardIds() as $shardId) {
-            yield $shardId => $this->getShardPtf($shardId);
+        foreach ($this->getAllShards() as $shard) {
+            yield $shard->id => $this->getShardPtf($shard);
         }
     }
 
@@ -498,7 +507,7 @@ class Registry
 
     // PROTECTED
 
-    protected function _heartbeat(string $shardId, IPDOSQLite $ipdoReg): bool
+    protected function _heartbeat(Shard $shard, IPDOSQLite $ipdoReg): bool
     {
         $time      = \time();
         $threshold = $time - $this->kv->getInt('rent_timeout');
@@ -510,7 +519,7 @@ class Registry
                         WHERE id = {id} AND active = 1 AND updated_at > {threshold}
             ) AND active = 1
             RETURNING id',
-            ['id' => $shardId, 'time' => $time, 'threshold' => $threshold],
+            ['id' => $shard->id, 'time' => $time, 'threshold' => $threshold],
             IPDO::FETCH_ONCE_NUM,
         );
 
@@ -520,15 +529,16 @@ class Registry
     /**
      * @throws ShardNotFoundException
      */
-    protected function checkShard(string $shardId): void
+    protected function checkShard(Shard $shard): void
     {
-        if ('' === $shardId || !$this->existsShard($shardId)) {
-            throw new ShardNotFoundException($shardId);
+        if (!$this->existsShard($shard)) {
+            throw new ShardNotFoundException($shard->id);
         }
     }
 
-    protected function getShardPtf(string $shardId): string
+    protected function getShardPtf(string|Shard $shardOrId): string
     {
-        return Path::normalize(\sprintf('%s/%s.sqlite', $this->baseDir, $shardId));
+        \is_object($shardOrId) && $shardOrId = $shardOrId->id;
+        return Path::normalize(\sprintf('%s/%s.sqlite', $this->baseDir, $shardOrId));
     }
 }

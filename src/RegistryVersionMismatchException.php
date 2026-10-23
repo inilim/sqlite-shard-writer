@@ -2,6 +2,6 @@
 
 declare(strict_types=1);
 
-namespace Inilim\SqliteShardWriter;
+namespace Inilim\SqliteShard;
 
-class RegistryVersionMismatchException extends \Inilim\SqliteShardWriter\SqliteShardWriterException {}
+class RegistryVersionMismatchException extends \Inilim\SqliteShard\SqliteShardException {}

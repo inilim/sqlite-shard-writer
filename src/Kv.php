@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Inilim\SqliteShardWriter;
+namespace Inilim\SqliteShard;
 
 use Inilim\IPDO\IPDO;
 use Inilim\IPDO\IPDOSQLite;
-use Inilim\SqliteShardWriter\KeyNotFoundKvException;
+use Inilim\SqliteShard\KeyNotFoundKvException;
 use Inilim\Tool\Obj;
 
 /**

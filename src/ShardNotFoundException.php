@@ -2,6 +2,6 @@
 
 declare(strict_types=1);
 
-namespace Inilim\SqliteShardWriter;
+namespace Inilim\SqliteShard;
 
-class ShardNotFoundException extends \Inilim\SqliteShardWriter\SqliteShardWriterException {}
+class ShardNotFoundException extends \Inilim\SqliteShard\SqliteShardException {}

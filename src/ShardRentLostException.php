@@ -2,6 +2,6 @@
 
 declare(strict_types=1);
 
-namespace Inilim\SqliteShardWriter;
+namespace Inilim\SqliteShard;
 
-class ShardRentLostException extends \Inilim\SqliteShardWriter\SqliteShardWriterException {}
+class ShardRentLostException extends \Inilim\SqliteShard\SqliteShardException {}

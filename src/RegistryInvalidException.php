@@ -2,6 +2,6 @@
 
 declare(strict_types=1);
 
-namespace Inilim\SqliteShardWriter;
+namespace Inilim\SqliteShard;
 
-class RegistryInvalidException extends \Inilim\SqliteShardWriter\SqliteShardWriterException {}
+class RegistryInvalidException extends \Inilim\SqliteShard\SqliteShardException {}
